@@ -2,10 +2,11 @@
 // The Gemini API key is read from the GEMINI_API_KEY environment variable (never put it in index.html).
 const KNOWLEDGE = require("./_knowledge");
 
-// Two key types are supported:
-//  - Google AI Studio keys (start with "AIza")  -> generativelanguage.googleapis.com
-//  - Vertex AI express-mode keys (start with "AQ.") -> aiplatform.googleapis.com
-const isVertexKey = (k) => /^AQ\./.test(k || "");
+// Google issues keys in different formats (AI Studio keys may start with "AIza" or "AQ."; Vertex AI express keys start with "AQ.").
+// So we try the Gemini Developer API first and, if the key is rejected there, the Vertex AI endpoint. The working one is remembered.
+const PROVIDERS = ["gemini", "vertex"];
+let workingProvider = null;
+const providerList = (k) => (/^AIza/.test(k) ? ["gemini"] : [workingProvider, ...PROVIDERS].filter((p, i, a) => p && a.indexOf(p) === i));
 // Model names change over time, so we try a list of candidates and remember the first one that works.
 const CANDIDATES = [
   "gemini-flash-latest", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
@@ -41,8 +42,8 @@ function limited(ip) {
   return arr.length > max;
 }
 
-async function callGemini(model, contents, key) {
-  const vertex = isVertexKey(key);
+async function callGemini(provider, model, contents, key) {
+  const vertex = provider === "vertex";
   const url = vertex
     ? `https://aiplatform.googleapis.com/v1/publishers/google/models/${model}:generateContent?key=${encodeURIComponent(key)}`
     : `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
@@ -64,7 +65,7 @@ module.exports = async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   const key = (process.env.GEMINI_API_KEY || "").trim();
   // Open /api/chat in a browser to check the setup (never reveals the key).
-  if (req.method === "GET") return res.status(200).json({ ok: true, configured: !!key, provider: key ? (isVertexKey(key) ? "vertex-express" : "gemini-api") : null });
+  if (req.method === "GET") return res.status(200).json({ ok: true, configured: !!key, provider: workingProvider, keyType: key ? (/^AIza/.test(key) ? "AIza" : /^AQ\./.test(key) ? "AQ." : "other") : null });
   if (req.method !== "POST") return res.status(405).json({ error: "method_not_allowed" });
 
   if (!key) return res.status(503).json({ error: "not_configured" });
@@ -87,13 +88,18 @@ module.exports = async (req, res) => {
   }
 
   try {
-    let out, tried = [];
-    for (const model of modelList()) {
-      tried.push(model);
-      out = await callGemini(model, contents, key);
-      if (out.ok) { workingModel = model; break; }
-      console.error("Gemini error", model, out.status, errMsg(out.data));
-      if (!isModelError(out)) break; // key / quota / permission problems: no point trying other models
+    let out, tried = [], done = false;
+    const isAuthError = (o) => o.status === 401 || o.status === 403 || (o.status === 400 && /api key|credential|permission|authenticat/i.test(errMsg(o.data)));
+    for (const provider of providerList(key)) {
+      for (const model of modelList()) {
+        tried.push(provider + ":" + model);
+        out = await callGemini(provider, model, contents, key);
+        if (out.ok) { workingProvider = provider; workingModel = model; done = true; break; }
+        console.error("Gemini error", provider, model, out.status, errMsg(out.data));
+        if (isAuthError(out)) break;        // this key doesn't work on this provider -> try the next provider
+        if (!isModelError(out)) { done = true; break; } // quota / server problems: stop
+      }
+      if (done) break;
     }
     if (!out.ok) {
       const rate = out.status === 429;
