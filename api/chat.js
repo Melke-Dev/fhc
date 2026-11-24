@@ -63,9 +63,9 @@ async function callGemini(provider, model, contents, key) {
 
 module.exports = async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
-  const key = (process.env.GEMINI_API_KEY || "").trim();
+  const key = (process.env.GEMINI_API_KEY || "").trim().replace(/^["']+|["']+$/g, "").trim(); // tolerate quotes/spaces pasted by mistake
   // Open /api/chat in a browser to check the setup (never reveals the key).
-  if (req.method === "GET") return res.status(200).json({ ok: true, configured: !!key, provider: workingProvider, keyType: key ? (/^AIza/.test(key) ? "AIza" : /^AQ\./.test(key) ? "AQ." : "other") : null });
+  if (req.method === "GET") return res.status(200).json({ ok: true, configured: !!key, provider: workingProvider, keyType: key ? (/^AIza/.test(key) ? "AIza" : /^AQ\./.test(key) ? "AQ." : "other") : null, keyLength: key.length });
   if (req.method !== "POST") return res.status(405).json({ error: "method_not_allowed" });
 
   if (!key) return res.status(503).json({ error: "not_configured" });
