@@ -579,6 +579,7 @@ window.addEventListener('popstate',function(){closeD()});
 
 /* ---------- AI chat ---------- */
 (function(){
+  var DEBUG=/[?&]debug\b/.test(location.search);
   var msgs=$('msgs'),ta=$('ta'),btn=$('sendBtn'),app=$('app'),hist=[],busy=false;
   var WELCOME='ሰላም! እኔ የፌዴራል ከፍተኛ ፍርድ ቤት የባለጉዳዮች መመሪያ ረዳት ነኝ። ስለ አገልግሎቶች መስፈርቶች (ለምሳሌ ይግባኝ፣ አቤቱታ፣ ግልባጭ) ይጠይቁኝ።';
   var CHIPS=['ይግባኝ ለማቅረብ ምን ያስፈልጋል?','በውክልና ስመጣ ምን ልይዝ?','የዋስትና ገንዘብ ተመላሽ ለመጠየቅ?','የፍርድ ቤቱ ስልክ ቁጥር?'];
@@ -612,7 +613,7 @@ window.addEventListener('popstate',function(){closeD()});
       var r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messages:hist.slice(-8)})});
       var j=await r.json().catch(function(){return {}});
       if(r.ok&&j.reply){reply=j.reply;hist.push({role:'assistant',content:reply});}
-      else reply=ERR[j.error]||(r.status===404?ERR.not_configured:'ይቅርታ፣ ስህተት ተከስቷል። እባክዎ እንደገና ይሞክሩ።');
+      else{reply=ERR[j.error]||(r.status===404?ERR.not_configured:'ይቅርታ፣ ስህተት ተከስቷል። እባክዎ እንደገና ይሞክሩ።');if(DEBUG&&(j.detail||j.status))reply+='\n\n[debug] '+(j.status||r.status)+' — '+(j.detail||'')+(j.tried?'  | tried: '+j.tried.join(', '):'');}
     }catch(e){reply='ግንኙነት አልተሳካም። የበይነመረብ ግንኙነትዎን ያረጋግጡ እና እንደገና ይሞክሩ።';}
     tp.remove();add('b',reply);busy=false;btn.disabled=false;
   }
