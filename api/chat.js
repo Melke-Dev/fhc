@@ -6,8 +6,15 @@ const KNOWLEDGE = require("./_knowledge");
 //  - Google AI Studio keys (start with "AIza")  -> generativelanguage.googleapis.com
 //  - Vertex AI express-mode keys (start with "AQ.") -> aiplatform.googleapis.com
 const isVertexKey = (k) => /^AQ\./.test(k || "");
-const FALLBACK_MODEL = "gemini-2.5-flash";
-const primaryModel = (k) => process.env.GEMINI_MODEL || (isVertexKey(k) ? FALLBACK_MODEL : "gemini-flash-latest");
+// Model names change over time, so we try a list of candidates and remember the first one that works.
+const CANDIDATES = [
+  "gemini-flash-latest", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
+  "gemini-3-flash", "gemini-3-flash-preview", "gemini-2.5-flash", "gemini-2.0-flash",
+];
+let workingModel = null;
+const modelList = () => [process.env.GEMINI_MODEL, workingModel, ...CANDIDATES].filter((m, i, a) => m && a.indexOf(m) === i);
+const isModelError = (out) => out.status === 404 || (out.status === 400 && /model|not found|not supported|publisher/i.test(errMsg(out.data)));
+const errMsg = (d) => String((d && d.error && (d.error.message || d.error.status)) || "").slice(0, 300);
 
 const SYSTEM = `You are the information assistant inside the "ባለጉዳዮች መመሪያ" (Litigants' Guide) website of the Federal High Court of Ethiopia.
 
@@ -80,14 +87,17 @@ module.exports = async (req, res) => {
   }
 
   try {
-    const PRIMARY_MODEL = primaryModel(key);
-    let out = await callGemini(PRIMARY_MODEL, contents, key);
-    if (!out.ok && (out.status === 404 || out.status === 400) && PRIMARY_MODEL !== FALLBACK_MODEL) {
-      out = await callGemini(FALLBACK_MODEL, contents, key);
+    let out, tried = [];
+    for (const model of modelList()) {
+      tried.push(model);
+      out = await callGemini(model, contents, key);
+      if (out.ok) { workingModel = model; break; }
+      console.error("Gemini error", model, out.status, errMsg(out.data));
+      if (!isModelError(out)) break; // key / quota / permission problems: no point trying other models
     }
     if (!out.ok) {
-      console.error("Gemini error", out.status, JSON.stringify(out.data).slice(0, 300));
-      return res.status(out.status === 429 ? 429 : 502).json({ error: out.status === 429 ? "rate_limited" : "upstream_error" });
+      const rate = out.status === 429;
+      return res.status(rate ? 429 : 502).json({ error: rate ? "rate_limited" : "upstream_error", status: out.status, detail: errMsg(out.data), tried });
     }
     const cand = out.data.candidates && out.data.candidates[0];
     const text = cand && cand.content && cand.content.parts ? cand.content.parts.map((p) => p.text || "").join("").trim() : "";
