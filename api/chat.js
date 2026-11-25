@@ -9,8 +9,8 @@ let workingProvider = null;
 const providerList = (k) => (/^AIza/.test(k) ? ["gemini"] : [workingProvider, ...PROVIDERS].filter((p, i, a) => p && a.indexOf(p) === i));
 // Model names change over time, so we try a list of candidates and remember the first one that works.
 const CANDIDATES = [
-  "gemini-flash-latest", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
-  "gemini-3-flash", "gemini-3-flash-preview", "gemini-2.5-flash", "gemini-2.0-flash",
+  "gemini-flash-latest", "gemini-2.5-flash", "gemini-flash-lite-latest", "gemini-2.5-flash-lite",
+  "gemini-3-flash", "gemini-3-flash-preview", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash", "gemini-2.0-flash",
 ];
 let workingModel = null;
 const modelList = () => [process.env.GEMINI_MODEL, workingModel, ...CANDIDATES].filter((m, i, a) => m && a.indexOf(m) === i);
@@ -48,17 +48,26 @@ async function callGemini(provider, model, contents, key) {
     ? `https://aiplatform.googleapis.com/v1/publishers/google/models/${model}:generateContent?key=${encodeURIComponent(key)}`
     : `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
   const headers = vertex ? { "Content-Type": "application/json" } : { "Content-Type": "application/json", "x-goog-api-key": key };
-  const r = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: SYSTEM }] },
-      contents,
-      generationConfig: { temperature: 0.2, maxOutputTokens: 1500 },
-    }),
-  });
-  const data = await r.json().catch(() => ({}));
-  return { ok: r.ok, status: r.status, data };
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 9000);
+  try {
+    const r = await fetch(url, {
+      method: "POST",
+      headers,
+      signal: ctl.signal,
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: SYSTEM }] },
+        contents,
+        generationConfig: { temperature: 0.2, maxOutputTokens: 1500 },
+      }),
+    });
+    const data = await r.json().catch(() => ({}));
+    return { ok: r.ok, status: r.status, data };
+  } catch (e) {
+    return { ok: false, status: 504, data: { error: { message: "timeout or network error" } } };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 module.exports = async (req, res) => {
@@ -89,21 +98,27 @@ module.exports = async (req, res) => {
 
   try {
     let out, tried = [], done = false;
+    const started = Date.now();
     const isAuthError = (o) => o.status === 401 || o.status === 403 || (o.status === 400 && /api key|credential|permission|authenticat/i.test(errMsg(o.data)));
+    const isBusy = (o) => [429, 500, 502, 503, 504].includes(o.status); // overloaded / quota on this model: another model may have capacity
     for (const provider of providerList(key)) {
+      let sawAuthError = false;
       for (const model of modelList()) {
+        if (Date.now() - started > 22000) { done = true; break; }
         tried.push(provider + ":" + model);
         out = await callGemini(provider, model, contents, key);
         if (out.ok) { workingProvider = provider; workingModel = model; done = true; break; }
         console.error("Gemini error", provider, model, out.status, errMsg(out.data));
-        if (isAuthError(out)) break;        // this key doesn't work on this provider -> try the next provider
-        if (!isModelError(out)) { done = true; break; } // quota / server problems: stop
+        if (isAuthError(out)) { sawAuthError = true; break; } // key not accepted by this provider -> try the next provider
+        if (model === workingModel) workingModel = null;
+        if (isModelError(out) || isBusy(out)) continue; // try the next model
+        done = true; break;                            // anything else: stop
       }
-      if (done) break;
+      if (done || !sawAuthError) break; // only switch provider when the key itself was rejected
     }
     if (!out.ok) {
-      const rate = out.status === 429;
-      return res.status(rate ? 429 : 502).json({ error: rate ? "rate_limited" : "upstream_error", status: out.status, detail: errMsg(out.data), tried });
+      const busy = [429, 500, 502, 503, 504].includes(out.status);
+      return res.status(busy ? 503 : 502).json({ error: busy ? "busy" : "upstream_error", status: out.status, detail: errMsg(out.data), tried });
     }
     const cand = out.data.candidates && out.data.candidates[0];
     const text = cand && cand.content && cand.content.parts ? cand.content.parts.map((p) => p.text || "").join("").trim() : "";
