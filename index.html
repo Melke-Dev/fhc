@@ -603,7 +603,7 @@ window.addEventListener('popstate',function(){closeD()});
   function typing(){var d=document.createElement('div');d.className='msg b';d.innerHTML='<span class="logo ava" aria-hidden="true"></span><div class="bub"><div class="dots"><i></i><i></i><i></i></div></div>';msgs.appendChild(d);msgs.scrollTop=msgs.scrollHeight;return d;}
   function chips(){$('chips').innerHTML=CHIPS.map(function(c){return '<button type="button" class="chip" data-q="'+c+'">'+c+'</button>'}).join('');}
   function reset(){hist=[];msgs.innerHTML='';add('b',WELCOME);chips();}
-  var ERR={not_configured:'የ AI ረዳቱ ገና አልተዘጋጀም። እባክዎ በአገልግሎቶች ገጽ ውስጥ ይፈልጉ ወይም ወደ 0112 76 52 76 ይደውሉ።',rate_limited:'ብዙ ጥያቄዎች ተልከዋል። እባክዎ ጥቂት ደቂቃ ቆይተው ይሞክሩ።'};
+  var ERR={not_configured:'የ AI ረዳቱ ገና አልተዘጋጀም። እባክዎ በአገልግሎቶች ገጽ ውስጥ ይፈልጉ ወይም ወደ 0112 76 52 76 ይደውሉ።',rate_limited:'ብዙ ጥያቄዎች ተልከዋል። እባክዎ ጥቂት ደቂቃ ቆይተው ይሞክሩ።',busy:'የ AI አገልግሎቱ በአሁኑ ጊዜ በጣም ተጨናንቋል። እባክዎ ከጥቂት ሰከንዶች በኋላ እንደገና ይሞክሩ።'};
   async function send(text){
     text=(text||'').trim();if(!text||busy)return;
     busy=true;btn.disabled=true;$('chips').innerHTML='';
